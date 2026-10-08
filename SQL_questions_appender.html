@@ -103,7 +103,7 @@
     <!-- Input Section -->
     <div class="panel">
       <h2>Paste SQL Question</h2>
-      <textarea id="rawInput" placeholder="Paste your raw question here (including ASCII tables +----+)..."></textarea>
+      <textarea id="rawInput" placeholder="Paste your raw question here..."></textarea>
       
       <div class="btn-row">
         <button class="primary" onclick="processAndAppend()">Append to README</button>
@@ -131,68 +131,61 @@
     const STORAGE_KEY_COUNT = "sql_readme_md_count";
     const SEPARATOR = '\n\n<hr style="height:4px;border:none;color:#333;background-color:#333;" />\n\n';
 
-    // Helper to turn ASCII borders (+---+ or | a | b |) into Markdown tables
+    // Converts ASCII boxes into clean Markdown tables
     function formatAsciiTablesToMarkdown(text) {
       const lines = text.split("\n");
       let inTable = false;
       let tableRows = [];
       let result = [];
 
+      function flushTable() {
+        if (tableRows.length > 0) {
+          const headers = tableRows[0];
+          result.push("| " + headers.join(" | ") + " |");
+          result.push("| " + headers.map(() => "-----").join(" | ") + " |");
+          for (let r = 1; r < tableRows.length; r++) {
+            result.push("| " + tableRows[r].join(" | ") + " |");
+          }
+          result.push("");
+          tableRows = [];
+        }
+        inTable = false;
+      }
+
       for (let i = 0; i < lines.length; i++) {
         let line = lines[i].trim();
 
-        // Recognize lines with +---+ or | ... |
-        if (/^\+[-+]+\+$/.test(line) \vert{}\vert{} /^\Vert{}.*\Vert{}$/.test(line)) {
-          if (!inTable) inTable = true;
-          if (/^\|.*\|$/.test(line)) {
-            // Extract column values
+        // Match table border or rows
+        let isBorder = /^\+[-+]+\+$/.test(line);
+        let isRow = /^\|.*\|$/.test(line);
+
+        if (isBorder || isRow) {
+          inTable = true;
+          if (isRow) {
             let cols = line.split("|").slice(1, -1).map(c => c.trim());
             tableRows.push(cols);
           }
         } else {
-          if (inTable) {
-            // Render collected table into Markdown
-            if (tableRows.length > 0) {
-              const headers = tableRows[0];
-              result.push("| " + headers.join(" | ") + " |");
-              result.push("| " + headers.map(() => "-----").join(" | ") + " |");
-              for (let r = 1; r < tableRows.length; r++) {
-                result.push("| " + tableRows[r].join(" | ") + " |");
-              }
-              result.push("");
-            }
-            tableRows = [];
-            inTable = false;
-          }
+          if (inTable) flushTable();
           result.push(lines[i]);
         }
       }
-      
-      if (inTable && tableRows.length > 0) {
-        const headers = tableRows[0];
-        result.push("| " + headers.join(" | ") + " |");
-        result.push("| " + headers.map(() => "-----").join(" | ") + " |");
-        for (let r = 1; r < tableRows.length; r++) {
-          result.push("| " + tableRows[r].join(" | ") + " |");
-        }
-        result.push("");
-      }
+      if (inTable) flushTable();
 
       return result.join("\n");
     }
 
-    // Parser for incoming questions
     function formatRawQuestion(rawText, questionNumber) {
-      let lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-      
+      // 1. Normalize spaces (replace non-breaking space \u00A0 with standard space)
+      let cleaned = rawText.replace(/\u00A0/g, " ");
+
+      // 2. Parse Title and Difficulty from initial lines
+      let lines = cleaned.split("\n").map(l => l.trim()).filter(l => l.length > 0);
       let title = "SQL Problem";
       let difficulty = "Easy";
-      
-      // Extract title and difficulty
-      if (lines.length > 0 && /Question\s*\d*[:.]/i.test(lines[0])) {
-        title = lines[0].replace(/^Question\s*\d*[:.]\s*/i, '').trim();
-      } else if (lines.length > 0) {
-        title = lines[0];
+
+      if (lines.length > 0) {
+        title = lines[0].replace(/^Question\s*\d*[:.]\s*/i, "").replace(/^\d+\.\s*/, "").trim();
       }
 
       for (let l of lines) {
@@ -202,29 +195,44 @@
         }
       }
 
-      // Convert schema/output ASCII tables
-      let parsedBody = formatAsciiTablesToMarkdown(rawText);
+      // 3. Convert ASCII grids to markdown tables
+      let parsedBody = formatAsciiTablesToMarkdown(cleaned);
 
-      // Clean up repetitive header tags
-      parsedBody = parsedBody.replace(/^Question\s*\d*[:.].*$/im, "");
-      parsedBody = parsedBody.replace(/^(Easy|Medium|Hard)$/im, "");
-      parsedBody = parsedBody.replace(/Solved/gi, "");
-      parsedBody = parsedBody.replace(/TopicsCompanies/gi, "");
-      parsedBody = parsedBody.replace(/SQL Schema/gi, "");
-      parsedBody = parsedBody.replace(/Pandas Schema/gi, "");
+      // 4. Strip out top metadata headers cleanly
+      let bodyLines = parsedBody.split("\n");
+      let filteredBody = [];
+      let foundTitle = false;
+      let foundDiff = false;
 
-      // Markdown formatting replacements
+      for (let line of bodyLines) {
+        let trimmed = line.trim();
+        if (!foundTitle && (trimmed === title || trimmed.includes(title))) {
+          foundTitle = true;
+          continue;
+        }
+        if (!foundDiff && /^(Easy|Medium|Hard)$/i.test(trimmed)) {
+          foundDiff = true;
+          continue;
+        }
+        if (/^(Solved|TopicsCompanies|SQL Schema|Pandas Schema)$/i.test(trimmed)) {
+          continue;
+        }
+        filteredBody.push(line);
+      }
+
+      parsedBody = filteredBody.join("\n").trim();
+
+      // 5. Structure Sections
       parsedBody = parsedBody.replace(/(Table:\s*(\w+))/gi, "### Table Schema: `$2`\n");
-      parsedBody = parsedBody.replace(/Write a solution to/gi, "### Problem Description\n\nWrite a solution to");
+      parsedBody = parsedBody.replace(/(Write a solution to[\s\S]*?)(### Problem Description|$)/i, function(match, p1) {
+        return "### Problem Description\n\n" + p1;
+      });
       parsedBody = parsedBody.replace(/(Example \d+:?)/gi, "### $1");
       parsedBody = parsedBody.replace(/\bInput:\s*/gi, "**Input:**\n\n");
       parsedBody = parsedBody.replace(/\bOutput:\s*/gi, "\n**Output:**\n\n");
-      parsedBody = parsedBody.replace(/\bExplanation:\s*/gi, "\n**Explanation:**\n");
+      parsedBody = parsedBody.replace(/\bExplanation:\s*/gi, "\n**Explanation:** ");
 
-      // Wrap dangling table references
-      parsedBody = parsedBody.replace(/(\w+)\s+table:/gi, "`$1` table:\n");
-
-      // Build Question structure
+      // Final Assembly
       let output = `# **Question No. ${questionNumber}: ${title}**\n\n`;
       output += `**Difficulty:** ${difficulty}\n\n`;
       output += parsedBody.trim();
@@ -274,13 +282,13 @@
       a.href = url;
       a.download = "README.md";
       a.click();
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(link = url);
     }
 
     function copyToClipboard() {
       const content = localStorage.getItem(STORAGE_KEY_CONTENT) || "";
       navigator.clipboard.writeText(content).then(() => {
-        alert("Copied README.md markdown to clipboard!");
+        alert("Copied to clipboard!");
       });
     }
 
@@ -292,7 +300,6 @@
       }
     }
 
-    // Initialize display on load
     render();
   </script>
 </body>
