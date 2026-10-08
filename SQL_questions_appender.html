@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL Markdown Generator & Appender</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: #f6f8fa;
+      color: #24292f;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    .panel {
+      background: #ffffff;
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+    }
+    h2, h3 { margin-top: 0; margin-bottom: 12px; }
+    textarea {
+      width: 100%;
+      height: 380px;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 13px;
+      padding: 12px;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      resize: vertical;
+      background: #fdfdfd;
+    }
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 9px 18px;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid #d0d7de;
+      background: #f6f8fa;
+      transition: 0.15s ease-in-out;
+    }
+    button:hover { background: #eef1f4; }
+    button.primary {
+      background: #2da44e;
+      color: #ffffff;
+      border-color: #2c974b;
+    }
+    button.primary:hover { background: #2c974b; }
+    button.download {
+      background: #0969da;
+      color: #ffffff;
+      border-color: #0860ca;
+    }
+    button.download:hover { background: #0860ca; }
+    button.danger {
+      background: #cf222e;
+      color: #ffffff;
+      border-color: #a40e26;
+      margin-left: auto;
+    }
+    button.danger:hover { background: #b62324; }
+    pre {
+      background: #f6f8fa;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      padding: 14px;
+      overflow: auto;
+      height: 480px;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .badge {
+      display: inline-block;
+      background: #eaeef2;
+      border-radius: 20px;
+      padding: 3px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #57609a;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Input Section -->
+    <div class="panel">
+      <h2>Paste SQL Question</h2>
+      <textarea id="rawInput" placeholder="Paste your raw question here (including ASCII tables +----+)..."></textarea>
+      
+      <div class="btn-row">
+        <button class="primary" onclick="processAndAppend()">Append to README</button>
+      </div>
+    </div>
+
+    <!-- Output & Actions Section -->
+    <div class="panel">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h2>Existing README.md Preview</h2>
+        <span class="badge" id="counterBadge">Questions: 0</span>
+      </div>
+      <pre id="outputPreview"></pre>
+      
+      <div class="btn-row">
+        <button class="download" onclick="downloadFile()">Download README.md</button>
+        <button onclick="copyToClipboard()">Copy Text</button>
+        <button class="danger" onclick="clearData()">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY_CONTENT = "sql_readme_md_content";
+    const STORAGE_KEY_COUNT = "sql_readme_md_count";
+    const SEPARATOR = '\n\n<hr style="height:4px;border:none;color:#333;background-color:#333;" />\n\n';
+
+    // Helper to turn ASCII borders (+---+ or | a | b |) into Markdown tables
+    function formatAsciiTablesToMarkdown(text) {
+      const lines = text.split("\n");
+      let inTable = false;
+      let tableRows = [];
+      let result = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        let line = lines[i].trim();
+
+        // Recognize lines with +---+ or | ... |
+        if (/^\+[-+]+\+$/.test(line) \vert{}\vert{} /^\Vert{}.*\Vert{}$/.test(line)) {
+          if (!inTable) inTable = true;
+          if (/^\|.*\|$/.test(line)) {
+            // Extract column values
+            let cols = line.split("|").slice(1, -1).map(c => c.trim());
+            tableRows.push(cols);
+          }
+        } else {
+          if (inTable) {
+            // Render collected table into Markdown
+            if (tableRows.length > 0) {
+              const headers = tableRows[0];
+              result.push("| " + headers.join(" | ") + " |");
+              result.push("| " + headers.map(() => "-----").join(" | ") + " |");
+              for (let r = 1; r < tableRows.length; r++) {
+                result.push("| " + tableRows[r].join(" | ") + " |");
+              }
+              result.push("");
+            }
+            tableRows = [];
+            inTable = false;
+          }
+          result.push(lines[i]);
+        }
+      }
+      
+      if (inTable && tableRows.length > 0) {
+        const headers = tableRows[0];
+        result.push("| " + headers.join(" | ") + " |");
+        result.push("| " + headers.map(() => "-----").join(" | ") + " |");
+        for (let r = 1; r < tableRows.length; r++) {
+          result.push("| " + tableRows[r].join(" | ") + " |");
+        }
+        result.push("");
+      }
+
+      return result.join("\n");
+    }
+
+    // Parser for incoming questions
+    function formatRawQuestion(rawText, questionNumber) {
+      let lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      
+      let title = "SQL Problem";
+      let difficulty = "Easy";
+      
+      // Extract title and difficulty
+      if (lines.length > 0 && /Question\s*\d*[:.]/i.test(lines[0])) {
+        title = lines[0].replace(/^Question\s*\d*[:.]\s*/i, '').trim();
+      } else if (lines.length > 0) {
+        title = lines[0];
+      }
+
+      for (let l of lines) {
+        if (/^(Easy|Medium|Hard)$/i.test(l)) {
+          difficulty = l.charAt(0).toUpperCase() + l.slice(1).toLowerCase();
+          break;
+        }
+      }
+
+      // Convert schema/output ASCII tables
+      let parsedBody = formatAsciiTablesToMarkdown(rawText);
+
+      // Clean up repetitive header tags
+      parsedBody = parsedBody.replace(/^Question\s*\d*[:.].*$/im, "");
+      parsedBody = parsedBody.replace(/^(Easy|Medium|Hard)$/im, "");
+      parsedBody = parsedBody.replace(/Solved/gi, "");
+      parsedBody = parsedBody.replace(/TopicsCompanies/gi, "");
+      parsedBody = parsedBody.replace(/SQL Schema/gi, "");
+      parsedBody = parsedBody.replace(/Pandas Schema/gi, "");
+
+      // Markdown formatting replacements
+      parsedBody = parsedBody.replace(/(Table:\s*(\w+))/gi, "### Table Schema: `$2`\n");
+      parsedBody = parsedBody.replace(/Write a solution to/gi, "### Problem Description\n\nWrite a solution to");
+      parsedBody = parsedBody.replace(/(Example \d+:?)/gi, "### $1");
+      parsedBody = parsedBody.replace(/\bInput:\s*/gi, "**Input:**\n\n");
+      parsedBody = parsedBody.replace(/\bOutput:\s*/gi, "\n**Output:**\n\n");
+      parsedBody = parsedBody.replace(/\bExplanation:\s*/gi, "\n**Explanation:**\n");
+
+      // Wrap dangling table references
+      parsedBody = parsedBody.replace(/(\w+)\s+table:/gi, "`$1` table:\n");
+
+      // Build Question structure
+      let output = `# **Question No. ${questionNumber}: ${title}**\n\n`;
+      output += `**Difficulty:** ${difficulty}\n\n`;
+      output += parsedBody.trim();
+
+      return output;
+    }
+
+    function processAndAppend() {
+      const input = document.getElementById("rawInput").value.trim();
+      if (!input) return;
+
+      let currentContent = localStorage.getItem(STORAGE_KEY_CONTENT) || "";
+      let currentCount = parseInt(localStorage.getItem(STORAGE_KEY_COUNT) || "0", 10) + 1;
+
+      const formattedQuestion = formatRawQuestion(input, currentCount);
+
+      if (currentContent.length > 0) {
+        currentContent += SEPARATOR + formattedQuestion;
+      } else {
+        currentContent = formattedQuestion;
+      }
+
+      localStorage.setItem(STORAGE_KEY_CONTENT, currentContent);
+      localStorage.setItem(STORAGE_KEY_COUNT, currentCount.toString());
+
+      document.getElementById("rawInput").value = "";
+      render();
+    }
+
+    function render() {
+      const content = localStorage.getItem(STORAGE_KEY_CONTENT) || "No questions added yet.";
+      const count = localStorage.getItem(STORAGE_KEY_COUNT) || "0";
+
+      document.getElementById("outputPreview").textContent = content;
+      document.getElementById("counterBadge").textContent = `Questions: ${count}`;
+    }
+
+    function downloadFile() {
+      const content = localStorage.getItem(STORAGE_KEY_CONTENT) || "";
+      if (!content) {
+        alert("The document is currently empty!");
+        return;
+      }
+      const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "README.md";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function copyToClipboard() {
+      const content = localStorage.getItem(STORAGE_KEY_CONTENT) || "";
+      navigator.clipboard.writeText(content).then(() => {
+        alert("Copied README.md markdown to clipboard!");
+      });
+    }
+
+    function clearData() {
+      if (confirm("Reset and clear all saved questions?")) {
+        localStorage.removeItem(STORAGE_KEY_CONTENT);
+        localStorage.removeItem(STORAGE_KEY_COUNT);
+        render();
+      }
+    }
+
+    // Initialize display on load
+    render();
+  </script>
+</body>
+</html>
